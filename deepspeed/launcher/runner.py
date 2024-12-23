@@ -603,6 +603,13 @@ def main(args=None):
             cmd, kill_cmd, env = runner.get_cmd(env, active_resources)
         else:
             cmd = runner.get_cmd(env, active_resources)
+    
+    # if DS_ACCELERATOR is set to cpuxla, change it to xla
+    # this is to ensure that the launcher script is the parent process 
+    # that uses xla first. everything before that will use cpu
+    if env.get('DS_ACCELERATOR', 'cpu') == 'cpuxla':
+        env['DS_ACCELERATOR'] = 'xla'
+
 
     logger.info(f"cmd = {' '.join(cmd)}")
     result = subprocess.Popen(cmd, env=env)

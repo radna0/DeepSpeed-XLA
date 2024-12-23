@@ -129,7 +129,6 @@ def terminate_process_tree(pid):
     for p in alive:
         p.kill()
 
-
 def main():
     args = parse_args()
     current_env = os.environ.copy()
@@ -175,6 +174,7 @@ def main():
     current_env["CROSS_SIZE"] = str(args.nnodes)
     current_env["LOCAL_SIZE"] = str(num_local_procs)
 
+
     if args.save_pid:
         print(f"launcher pid: {os.getpid()}")
 
@@ -217,44 +217,71 @@ def main():
                     print(e)
                     raise ValueError(f"unable to create directory {args.enable_each_rank_log} for each rank log.")
             log_name_prefix = time.strftime("%Y%m%d%H%M%S", time.localtime())
+        
+        # if device is xla, we need to use the xla multiprocessing spawn
+        if get_accelerator()._name == "xla":
+            import asyncio
+            from multiprocessing import Manager
+            import torch_xla.distributed.xla_multiprocessing as xmp
+            from accelerate.utils import PrepareForLaunch, patch_environment
+            from pathlib import Path
+            import importlib
 
-        for local_proc in range(0, num_local_procs):
-            # each process's rank
-            dist_rank = global_rank_mapping[local_node][local_proc]
-            local_rank = dist_rank % num_local_procs
-            current_env["RANK"] = str(dist_rank)
-            current_env["LOCAL_RANK"] = str(local_rank)
+            script_path = Path(args.training_script)
+            sys.path.append(str(script_path.parent.resolve()))
+            mod_name = script_path.stem
+            mod = importlib.import_module(mod_name)
+            
+            # Patch sys.argv
+            sys.argv = [mod.__file__] + args.training_script_args
 
-            # spawn the processes
-            cmd = []
-            if args.bind_cores_to_rank:
-                cores_per_rank, numactl_cmd = get_numactl_cmd(args.bind_core_list, num_local_procs, local_rank)
-                current_env["OMP_NUM_THREADS"] = f"{cores_per_rank}"
-                cmd = cmd + numactl_cmd
-            if not args.no_python:
-                cmd.append(sys.executable)
-                cmd.append("-u")
-                if args.module:
-                    cmd.append("-m")
-            else:
-                if args.module:
-                    raise ValueError("Don't use both the '--no_python' flag"
-                                     " and the '--module' flag at the same time.")
-            cmd.append(args.training_script)
-            # A user may not want to pass local_rank as a keyword arg so we make this optional.
-            if not args.no_local_rank:
-                cmd.append(f"--local_rank={local_rank}")
-            cmd += args.training_script_args
+            # Shared manager to track processes
+            manager = Manager()
+            process_info = manager.list()
 
-            if args.enable_each_rank_log != "None":
-                log_file = os.path.join(args.enable_each_rank_log, f"{log_name_prefix}_rank{dist_rank}.log")
-                log_fd = open(log_file, 'w')
-                process = subprocess.Popen(cmd, env=current_env, stdout=log_fd, stderr=log_fd)
-            else:
-                process = subprocess.Popen(cmd, env=current_env)
-            # logs the command from processes
-            logger.info(f"process {process.pid} spawned with command: {cmd}")
-            processes.append(process)
+            main_function = getattr(mod, "main")
+
+            with patch_environment(**current_env):
+                xmp.spawn(main_function, args=(process_info,), nprocs=None)
+            # TODO: xmp is blocking, so we need to do it async
+        else:
+            for local_proc in range(0, num_local_procs):
+                # each process's rank
+                dist_rank = global_rank_mapping[local_node][local_proc]
+                local_rank = dist_rank % num_local_procs
+                current_env["RANK"] = str(dist_rank)
+                current_env["LOCAL_RANK"] = str(local_rank)
+
+                # spawn the processes
+                cmd = []
+                if args.bind_cores_to_rank:
+                    cores_per_rank, numactl_cmd = get_numactl_cmd(args.bind_core_list, num_local_procs, local_rank)
+                    current_env["OMP_NUM_THREADS"] = f"{cores_per_rank}"
+                    cmd = cmd + numactl_cmd
+                if not args.no_python:
+                    cmd.append(sys.executable)
+                    cmd.append("-u")
+                    if args.module:
+                        cmd.append("-m")
+                else:
+                    if args.module:
+                        raise ValueError("Don't use both the '--no_python' flag"
+                                        " and the '--module' flag at the same time.")
+                cmd.append(args.training_script)
+                # A user may not want to pass local_rank as a keyword arg so we make this optional.
+                if not args.no_local_rank:
+                    cmd.append(f"--local_rank={local_rank}")
+                cmd += args.training_script_args
+
+                if args.enable_each_rank_log != "None":
+                    log_file = os.path.join(args.enable_each_rank_log, f"{log_name_prefix}_rank{dist_rank}.log")
+                    log_fd = open(log_file, 'w')
+                    process = subprocess.Popen(cmd, env=current_env, stdout=log_fd, stderr=log_fd)
+                else:
+                    process = subprocess.Popen(cmd, env=current_env)
+                # logs the command from processes
+                logger.info(f"process {process.pid} spawned with command: {cmd}")
+                processes.append(process)
     else:
         from ..elasticity import DSElasticAgent
         from torch.distributed.elastic.rendezvous import RendezvousParameters
