@@ -12,10 +12,14 @@ try:
     import torch_xla.core.xla_model as xm
     import torch_xla.distributed.xla_backend
     import torch_xla.runtime as xr
+
+    from tpu_info import device as tpu_device
+    from tpu_info import metrics
     
     XLA_AVAILABLE = True
 except ImportError as e:
     XLA_AVAILABLE = False
+    print(f"XLA is not available: {e}")
     pass
 
 
@@ -27,6 +31,10 @@ class XLA_Accelerator(DeepSpeedAccelerator):
         self._compile_backend = "inductor"
         self._communication_backend_name = 'xla'
         self.max_mem = 0
+        self.chip_type, self.count = tpu_device.get_local_chips()
+        if not self.chip_type or not self.count:
+            raise RuntimeError("No TPU devices found.")
+
 
     def is_synchronized_device(self):
         return True
@@ -116,61 +124,64 @@ class XLA_Accelerator(DeepSpeedAccelerator):
     def empty_cache(self):
         return
 
-    def get_rss(self, device):
-        mem = xm.get_memory_info(device)["bytes_used"] 
+    def get_rss(self, device_index=0):
+        device_usage = metrics.get_chip_usage(self.chip_type)[device_index]
+        mem = device_usage.memory_usage
         if mem > self.max_mem:
             self.max_mem = mem
         return mem
 
-    def reset_rss(self, device):
-        mem = xm.get_memory_info(device)["bytes_used"] 
+    def reset_rss(self, device_index=0):
+        device_usage = metrics.get_chip_usage(self.chip_type)[device_index]
+        mem = device_usage.memory_usage
         self.max_mem = mem
         return mem
 
-    def memory_allocated(self, device_index=None):
-        return self.get_rss(self.device(device_index))
+    def memory_allocated(self, device_index=0):
+        return self.get_rss(device_index)
 
-    def max_memory_allocated(self, device_index=None):
-        self.get_rss(self.device(device_index))
+    def max_memory_allocated(self, device_index=0):
+        self.get_rss(device_index)
         return self.max_mem
 
-    def reset_max_memory_allocated(self, device_index=None):
-        self.reset_rss(self.device(device_index))
+    def reset_max_memory_allocated(self, device_index=0):
+        self.reset_rss(device_index)
         return
 
-    def memory_cached(self, device_index=None):
-        return self.get_rss(self.device(device_index))
+    def memory_cached(self, device_index=0):
+        return self.get_rss(device_index)
 
-    def max_memory_cached(self, device_index=None):
-        self.get_rss(self.device(device_index))
+    def max_memory_cached(self, device_index=0):
+        self.get_rss(device_index)
         return self.max_mem
 
-    def reset_max_memory_cached(self, device_index=None):
-        self.reset_rss(self.device(device_index))
+    def reset_max_memory_cached(self, device_index=0):
+        self.reset_rss(device_index)
         return
 
-    def memory_stats(self, device_index=None):
-        mem = self.get_rss(self.device(device_index))
+    def memory_stats(self, device_index=0):
+        mem = self.get_rss(device_index)
         mem_stat = {}
         mem_stat['allocated_bytes.all.current'] = mem
         mem_stat['allocated_bytes.all.peak'] = self.max_mem
         return mem_stat
 
-    def reset_peak_memory_stats(self, device_index=None):
-        self.reset_rss(self.device(device_index))
+    def reset_peak_memory_stats(self, device_index=0):
+        self.reset_rss(device_index)
         return
 
-    def memory_reserved(self, device_index=None):
-        return self.get_rss(self.device(device_index))
+    def memory_reserved(self, device_index=0):
+        return self.get_rss(device_index)
 
-    def max_memory_reserved(self, device_index=None):
-        self.get_rss(self.device(device_index))
+    def max_memory_reserved(self, device_index=0):
+        self.get_rss(device_index)
         return self.max_mem
 
-    def total_memory(self, device_index=None):
-        return xm.get_memory_info(self.device(device_index))["bytes_limit"]
+    def total_memory(self, device_index=0):
+        device_usage = metrics.get_chip_usage(self.chip_type)[device_index]
+        return device_usage.total_memory
 
-    def available_memory(self, device_index=None):
+    def available_memory(self, device_index=0):
         total = self.total_memory(device_index)
         used = self.memory_allocated(device_index)
         return total - used
@@ -330,3 +341,5 @@ class XLA_Accelerator(DeepSpeedAccelerator):
         else:
             raise ValueError(
                 f"{backend} not supported by {self.device_name()}. Supported Backends are {supported_backends}")
+
+
