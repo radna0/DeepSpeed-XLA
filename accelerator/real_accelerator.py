@@ -192,10 +192,14 @@ def get_accelerator():
         from .cuda_accelerator import CUDA_Accelerator
 
         ds_accelerator = CUDA_Accelerator()
-    elif accelerator_name == "cpu" or accelerator_name == "cpuxla":
+    elif accelerator_name == "cpu":
         from .cpu_accelerator import CPU_Accelerator
 
         ds_accelerator = CPU_Accelerator()
+    elif accelerator_name == "cpuxla":
+        from .cpuxla_accelerator import CPUXLA_Accelerator
+
+        ds_accelerator = CPUXLA_Accelerator()
     elif accelerator_name == "xpu.external":
         # XPU_Accelerator is already imported in detection stage
         ds_accelerator = XPU_Accelerator()

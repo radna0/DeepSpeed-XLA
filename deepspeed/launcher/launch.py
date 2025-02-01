@@ -241,8 +241,9 @@ def main():
 
             main_function = getattr(mod, "main")
 
+
             with patch_environment(**current_env):
-                xmp.spawn(main_function, args=(process_info,), nprocs=None)
+                xmp.spawn(main_function, args=(process_info,), nprocs=1 if num_local_procs == 1 else None)
             # TODO: xmp is blocking, so we need to do it async
         else:
             for local_proc in range(0, num_local_procs):
